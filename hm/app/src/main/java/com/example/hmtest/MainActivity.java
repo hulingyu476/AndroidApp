@@ -1,17 +1,25 @@
 package com.example.hmtest;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.SparseIntArray;
@@ -21,6 +29,8 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -29,6 +39,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int DISPLAY_WIDTH = 1080;
     private static final int DISPLAY_HEIGHT = 720;
     private static final int RECORD_REQUEST_CODE = 3839;
+    private static final int mRequestCode = 1312;
     private int mScreenDensity;
     private Button mBtnRecoder;
     boolean isRecording = false;
@@ -46,6 +57,11 @@ public class MainActivity extends AppCompatActivity {
         ORIENTTIONS.append(Surface.ROTATION_270,180);
     }
 
+    //Manifest.permission.CAPTURE_AUDIO_OUTPUT need system app，temp marked it
+    String[] permissions = new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE,/*Manifest.permission.CAPTURE_AUDIO_OUTPUT,*/
+            Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.RECORD_AUDIO};
+    List<String> mPermissionlist = new ArrayList<>();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -60,6 +76,79 @@ public class MainActivity extends AppCompatActivity {
         
         mBtnRecoder = (Button) findViewById(R.id.id_btn_screen_recorder);
         mBtnRecoder.setOnClickListener(v -> isStartRecordScreen());
+
+        if(Build.VERSION.SDK_INT >= 23){
+            //6.0 need to dynamic Permission
+            initPermission();
+        }
+    }
+
+    private void initPermission() {
+        //clear non granted permissions
+        mPermissionlist.clear();
+
+        //check permissions is grant
+        for(int i=0; i<permissions.length; i++){
+            if(ContextCompat.checkSelfPermission(this,permissions[i]) != PackageManager.PERMISSION_GRANTED){
+                mPermissionlist.add(permissions[i]);  //add non granted permission
+            }
+        }
+
+        //sumit to request permission
+        if(mPermissionlist.size()>0){
+            ActivityCompat.requestPermissions(this,permissions,mRequestCode);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        boolean hasPermissionDismiss=false;
+        if(mRequestCode == requestCode){
+            for(int i=0; i< grantResults.length; i++){
+                if(grantResults[i] == -1){
+                    hasPermissionDismiss = true;
+                }
+            }
+            if(hasPermissionDismiss){
+                showPermissionDialog(); //goto settings
+            }
+        }
+    }
+
+    AlertDialog mPermissionDialog;
+    private void showPermissionDialog() {
+        if(mPermissionDialog == null){
+            mPermissionDialog = new AlertDialog.Builder(this)
+                    .setMessage("please granted permission")
+                    .setCancelable(false)
+                    .setPositiveButton("setting", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            cancelPermissionDialog();
+                            //go to setting page
+                            Intent intent = new Intent();
+                            intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                            Uri uri = Uri.fromParts("package",MainActivity.this.getPackageName(),null);
+                            intent.setData(uri);
+                            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                            overridePendingTransition(0,0);
+                        }
+                    })
+                    .setNegativeButton("cancle", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            finish();
+                        }
+                    })
+                    .create();
+        }
+        mPermissionDialog.show();
+    }
+
+    private void cancelPermissionDialog() {
+        mPermissionDialog.cancel();
     }
 
     private void isStartRecordScreen() {
