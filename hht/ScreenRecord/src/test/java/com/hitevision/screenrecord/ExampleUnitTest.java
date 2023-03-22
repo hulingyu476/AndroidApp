@@ -1,4 +1,4 @@
-package com.example.hmtest;
+package com.hitevision.screenrecord;
 
 import org.junit.Test;
 
