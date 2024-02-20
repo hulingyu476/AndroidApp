@@ -1,0 +1,174 @@
+import io.jenkins.blueocean.rest.impl.pipeline.PipelineNodeGraphVisitor
+import io.jenkins.blueocean.rest.impl.pipeline.FlowNodeWrapper
+import org.jenkinsci.plugins.workflow.actions.TimingAction
+
+def vendorRemote = "http://gitlab.optoma.com/aki.wang/akitest.git"
+def mirrorRemote = "http://gitlab.optoma.com/aki.wang/akimirrortest.git"
+
+pipeline {
+    agent any
+    options {
+        // Stop the build early in case of compile or test failures
+        skipStagesAfterUnstable()
+    }
+    stages {
+        stage('Mirror') {
+            steps {
+                script {
+                    withCredentials([gitUsernamePassword(credentialsId: "Matthew", gitToolName: 'git-tool')]) {
+                        def folder = "project_vendor"
+                        dir(folder) {
+                            deleteDir()
+                        }
+                        // 方法一：修改 origin 的 push 路徑為 $mirrorRemote
+//                        if (!fileExists(folder)) {
+//                            sh "git clone ${vendorRemote} ${folder}"
+//                            dir(folder) {
+//                                sh "git remote set-url --push origin ${mirrorRemote}"
+//                            }
+//                        }
+//                        dir(folder) {
+//                            sh "git remote -v"
+//                            sh "git fetch -p"
+//                            try {
+////                                def result = sh(returnStdout: true, script: "git push -f --mirror mirrorRemote")
+////                                println "result is ${result}"
+//                                sh "git push -f --mirror"
+//                            } catch (Exception e) {
+//                                echo 'Exception occurred: ' + e.toString()
+//                            }
+//                        }
+                        //
+                        // 方法二：新增一個 remote 路徑
+                        if (!fileExists(folder)) {
+                            sh "git clone ${vendorRemote} ${folder}"
+                            dir(folder) {
+                                sh "git remote add mirrorRemote ${mirrorRemote}"
+                            }
+                        }
+                        dir(folder) {
+                            sh "git remote -v"
+                            sh "git fetch -p origin"
+                            sh "git push -f --mirror mirrorRemote"
+//                            try {
+////                                def result = sh(returnStdout: true, script: "git push -f --mirror mirrorRemote")
+////                                println "result is ${result}"
+//                                sh "git push -f --mirror mirrorRemote"
+//                            } catch (Exception e) {
+//                                echo 'Exception occurred: ' + e.toString()
+//                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage('Clone') {
+            steps {
+                script {
+                    withCredentials([gitUsernamePassword(credentialsId: "Matthew", gitToolName: 'git-tool')]) {
+                        def folder = "project"
+                        if (!fileExists(folder)) {
+                            sh "git clone ${mirrorRemote} ${folder}"
+                        } else {
+                            dir(folder) {
+                                sh "git fetch"
+                                sh "git pull"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage('Clean') {
+            steps {
+                // Clean
+                dir('project') {
+                    sh "./gradlew clean"
+                }
+            }
+        }
+        stage('Build APK') {
+            steps {
+                dir('project') {
+                    // Building the APK
+                    sh "./gradlew assemble"
+
+                    // Archive the APKs so that they can be downloaded from Jenkins
+                    archiveArtifacts '**/*.apk'
+                }
+            }
+        }
+        stage('Sign') {
+            steps {
+                // Sign key to apk
+                script {
+                    dir('project') {
+                        def files = findFiles glob: '**/*.apk'
+                        for (file in files) {
+                            println file.path
+                            def signPath = "/opt/develop-resource/sign" // 須替換成serv上的絕對路徑
+                            sh "java -jar ${signPath}/apksigner.jar sign --key ${signPath}/core_uhd55/platform.pk8 --cert ${signPath}/core_uhd55/platform.x509.pem ${file.path}"
+                            // 改黨名去掉 unsigned
+                            archiveArtifacts '**/*.apk'
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            // Notify team of the success
+            notifyEmail(
+                    "[Jenkins] ${env.JOB_NAME} - ${env.BUILD_NUMBER}:(${currentBuild.currentResult})",
+                    ""
+            )
+        }
+        failure {
+            // Notify team of the failure
+            notifyEmail(
+                    "[Jenkins] ${env.JOB_NAME} - ${env.BUILD_NUMBER}:(${currentBuild.currentResult})",
+                    ""
+            )
+//            mail to: emailRecipient, subject: 'Oops!', body: "Build ${env.BUILD_NUMBER} is FAILED; ${env.BUILD_URL}"
+        }
+        aborted {
+            // Notify team of the aborted
+            notifyEmail(
+                    "[Jenkins] ${env.JOB_NAME} - ${env.BUILD_NUMBER}:(${currentBuild.currentResult})",
+                    ""
+            )
+            mail to: emailRecipient, subject: 'Oops!', body: "Build ${env.BUILD_NUMBER} is ABORTED; ${env.BUILD_URL}"
+        }
+        unstable {
+            // Notify team of the unstable
+            notifyEmail(
+                    "[Jenkins] ${env.JOB_NAME} - ${env.BUILD_NUMBER}:(${currentBuild.currentResult})",
+                    ""
+            )
+            mail to: emailRecipient, subject: 'Oops!', body: "Build ${env.BUILD_NUMBER} is ABORTED; ${env.BUILD_URL}"
+        }
+    }
+}
+
+void notifyEmail(String subject, String message) {
+//    mail(
+//            to: emailRecipient,
+//            subject: subject,
+//            body: "$subject\n$message"
+//    )
+    def files = findFiles glob: '**/*.apk'
+    def pattern = ""
+    for (file in files) {
+        pattern += "${file.path}, "
+    }
+    println pattern
+    emailext(
+//            attachmentsPattern: '**/*.apk',
+//            attachmentsPattern: pattern,
+            body: '''${SCRIPT, template="groovy-html.template"}''',
+            mimeType: 'text/html',
+            subject: "[Jenkins] ${subject}",
+            to: "aki.wang@optoma.com"
+    )
+}
